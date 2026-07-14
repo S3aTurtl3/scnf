@@ -9,6 +9,7 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 
+
 import diffrax
 import equinox as eqx
 import jax
@@ -43,7 +44,7 @@ class Config:
     learning_rate: float = 1e-3
     lr_schedule: str = "constant"
     grad_clip: float = 0.0
-    batch_size: int = 512
+    batch_size: int = 50  # Changed default from 512 to 50
     num_iters: int = 2000
 
     t0: float = 0.0
@@ -78,7 +79,8 @@ def make_checkerboard(num_samples, rng):
 
 
 class Datasets:
-    def __init__(self, n_train=10_000, n_val=2_000, n_test=2_000, seed=42):
+    # Changed default sizes from 10_000, 2_000, 2_000 to 100
+    def __init__(self, n_train=100, n_val=100, n_test=100, seed=42):
         rng = np.random.default_rng(seed)
         train = make_checkerboard(n_train, rng)
         self.mean, self.std = train.mean(axis=0), train.std(axis=0) + 1e-6
@@ -128,7 +130,7 @@ class SirenField(eqx.Module):
         for i in range(cfg.depth - 1):
             layers.append(SirenLayer(w, w, w0=cfg.w0_hidden, key=keys[i + 1]))
         layers.append(SirenLayer(w, out_size, w0=cfg.w0_hidden, is_last=True, key=keys[-1]))
-        self.layers = layers
+        self.self.layers = layers
 
     def __call__(self, t, y, args):
         x = jnp.concatenate([y, jnp.asarray(t)[None]])
@@ -405,7 +407,8 @@ def _chunk_metrics(model, data, key):
     return batch_metrics(model, data, key)
 
 
-def evaluate(model: CNF, data, key, chunk: int = 500) -> dict:
+# Changed chunk default from 500 to 50 to accommodate a validation dataset size of 100
+def evaluate(model: CNF, data, key, chunk: int = 50) -> dict:
     out = {"nll": [], "kinetic": [], "jac_frob": [], "nfe": [], "maxed_frac": []}
     for i in range(0, (data.shape[0] // chunk) * chunk, chunk):
         m = _chunk_metrics(model, data[i:i + chunk], jr.fold_in(key, i))
@@ -765,14 +768,14 @@ def parse_args():
     p.add_argument("--no-stratified", action="store_true")
     p.add_argument("--quadrature", action="store_true")
 
-    p.add_argument("--trials", type=int, default=12)
+    p.add_argument("--trials", type=int, default=1)  # Changed default from 12 to 1 (making it 4 seeded + 1 random = 5 configs)
     p.add_argument("--stage-iters", default="120,350,900")
     p.add_argument("--keep-frac", type=float, default=0.34)
-    p.add_argument("--search-batch", type=int, default=128)
+    p.add_argument("--search-batch", type=int, default=50)  # Changed default from 128 to 50
     p.add_argument("--nfe-weight", type=float, default=0.002)
     p.add_argument("--time-budget", type=float, default=float("inf"))
     p.add_argument("--final-iters", type=int, default=2000)
-    p.add_argument("--final-batch", type=int, default=512)
+    p.add_argument("--final-batch", type=int, default=50)  # Changed default from 512 to 50
     p.add_argument("--no-final", action="store_true")
     return p.parse_args()
 
@@ -816,7 +819,7 @@ def main():
     if not args.tune:
         cfg = single_run_config(args)
         if args.smoke:
-            cfg = cfg.replace(num_iters=5, batch_size=64)
+            cfg = cfg.replace(num_iters=5, batch_size=50)  # Changed batch size from 64 to 50
         print(f"Config: {cfg.summary()}", flush=True)
         print(f"        iters={cfg.num_iters}, batch={cfg.batch_size}, "
               f"rtol=atol={cfg.rtol}, exact_logp={cfg.exact_logp}, "
@@ -841,8 +844,8 @@ def main():
 
     if args.smoke:
         print(">>> SMOKE TEST: tiny budgets, results are meaningless <<<", flush=True)
-        args.stage_iters, args.trials, args.search_batch = "3,6", 4, 32
-        args.final_iters, args.final_batch = 5, 64
+        args.stage_iters, args.trials, args.search_batch = "3,6", 1, 50  # Aligned with 1 trial and batch 50
+        args.final_iters, args.final_batch = 5, 50
 
     records, hours = run_search(args, data)
     if not records:

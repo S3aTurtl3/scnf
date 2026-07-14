@@ -1,16 +1,18 @@
 #!/bin/bash
-#SBATCH -J scnf # Job name
+#SBATCH -J minisi # Job name
 #SBATCH -p mit_normal_gpu # Partition(s) (separate with
 # commas if using multiple)
 #SBATCH -c 11 # Number of cores
 #SBATCH -t 0-01:30:00 # Time (D-HH:MM:SS)
 #SBATCH --mem=40G # Memory
-#SBATCH -o scnfpy_%j.o # Name of standard output file
-#SBATCH -e scnfpy_%j.e # Name of standard error file
+#SBATCH -o minisi_%j.o # Name of standard output file
+#SBATCH -e minisi_%j.e # Name of standard error file
+#SBATCH --mail-user=orealao@mit.edu
+#SBATCH --mail-type=BEGIN,END,FAIL
 
 # load software environment
 module load miniforge
 # print a statement
 cd /home/orealao/scnf # go to home directory
 # execute python code
-python cnf_siren_ot.py
+python cnfsmini.py
