@@ -15,4 +15,4 @@ module load miniforge
 # print a statement
 cd /home/orealao/scnf # go to home directory
 # execute python code
-python cnfsmini.py
+pixi run python cnfsmini.py
