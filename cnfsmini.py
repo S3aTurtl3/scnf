@@ -130,7 +130,7 @@ class SirenField(eqx.Module):
         for i in range(cfg.depth - 1):
             layers.append(SirenLayer(w, w, w0=cfg.w0_hidden, key=keys[i + 1]))
         layers.append(SirenLayer(w, out_size, w0=cfg.w0_hidden, is_last=True, key=keys[-1]))
-        self.self.layers = layers
+        self.layers = layers
 
     def __call__(self, t, y, args):
         x = jnp.concatenate([y, jnp.asarray(t)[None]])
