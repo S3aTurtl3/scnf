@@ -8,19 +8,15 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-
-
 import diffrax
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import jax.random as jr
 import matplotlib
-import optax
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 
 BASELINE_TANH_NLL, BASELINE_TANH_NFE = 2.1168, 51.0
 BASELINE_SIREN_NLL, BASELINE_SIREN_NFE = 2.0127, 127.1
@@ -44,7 +40,7 @@ class Config:
     learning_rate: float = 1e-3
     lr_schedule: str = "constant"
     grad_clip: float = 0.0
-    batch_size: int = 50  # Changed default from 512 to 50
+    batch_size: int = 50  
     num_iters: int = 2000
 
     t0: float = 0.0
@@ -79,7 +75,6 @@ def make_checkerboard(num_samples, rng):
 
 
 class Datasets:
-    # Changed default sizes from 10_000, 2_000, 2_000 to 100
     def __init__(self, n_train=100, n_val=100, n_test=100, seed=42):
         rng = np.random.default_rng(seed)
         train = make_checkerboard(n_train, rng)
@@ -407,9 +402,13 @@ def _chunk_metrics(model, data, key):
     return batch_metrics(model, data, key)
 
 
-# Changed chunk default from 500 to 50 to accommodate a validation dataset size of 100
 def evaluate(model: CNF, data, key, chunk: int = 50) -> dict:
+    # Safely restrict evaluation batch size to current dataset size to prevent errors
+    chunk = min(chunk, data.shape[0])
     out = {"nll": [], "kinetic": [], "jac_frob": [], "nfe": [], "maxed_frac": []}
+    if chunk == 0:
+        return {k: float("nan") for k in out}
+        
     for i in range(0, (data.shape[0] // chunk) * chunk, chunk):
         m = _chunk_metrics(model, data[i:i + chunk], jr.fold_in(key, i))
         out["nll"].append(float(m.nll))
@@ -504,11 +503,16 @@ def run_search(args, data):
     space = dict(SEARCH_SPACE)
     if args.quadrature:
         space.pop("mc_samples")
+        
+    # Strictly respect the total number of configurations requested.
+    # Prioritizes up to 4 seeded configs, then samples remaining from SEARCH_SPACE.
     configs = seed_configs(base) + [
         base.replace(**{k: v.sample(rng) for k, v in space.items()})
-        for _ in range(args.trials)
+        for _ in range(max(0, args.trials - len(seed_configs(base))))
     ]
-    print(f"Candidates: {len(configs)} (4 seeded + {args.trials} random)", flush=True)
+    configs = configs[:args.trials]
+    
+    print(f"Candidates: {len(configs)} total configurations evaluated.", flush=True)
 
     print("Calibrating step time on this machine ...", flush=True)
     spi = time_per_iter(configs[0], loader, jr.PRNGKey(args.seed))
@@ -760,7 +764,7 @@ def parse_args():
     p.add_argument("--width", type=int, default=None)
     p.add_argument("--depth", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
-    p.add_argument("--batch-size", type=int, default=None)
+    p.add_argument("--batch-size", type=int, default=50)  
     p.add_argument("--iters", type=int, default=None)
     p.add_argument("--seed", type=int, default=0)
 
@@ -768,16 +772,31 @@ def parse_args():
     p.add_argument("--no-stratified", action="store_true")
     p.add_argument("--quadrature", action="store_true")
 
-    p.add_argument("--trials", type=int, default=1)  # Changed default from 12 to 1 (making it 4 seeded + 1 random = 5 configs)
+    # This now sets a strict limit on total trials evaluated (seeded baseline + random space)
+    p.add_argument("--trials", type=int, default=5, help="Total hyperparameter trials to evaluate (including baselines)")  
     p.add_argument("--stage-iters", default="120,350,900")
     p.add_argument("--keep-frac", type=float, default=0.34)
-    p.add_argument("--search-batch", type=int, default=50)  # Changed default from 128 to 50
+    p.add_argument("--search-batch", type=int, default=None, help="Batch size for HP tuning (falls back to --batch-size)")  
     p.add_argument("--nfe-weight", type=float, default=0.002)
     p.add_argument("--time-budget", type=float, default=float("inf"))
     p.add_argument("--final-iters", type=int, default=2000)
-    p.add_argument("--final-batch", type=int, default=50)  # Changed default from 512 to 50
+    p.add_argument("--final-batch", type=int, default=None, help="Batch size for final training (falls back to --batch-size)")  
     p.add_argument("--no-final", action="store_true")
-    return p.parse_args()
+    
+    # New argument controlling dataset sample generation size
+    p.add_argument("--dataset-size", type=int, default=1000, help="Number of samples to generate for train/val/test splits")
+
+    args = p.parse_args()
+    
+    # Cascade default batch size to specialized search/final configurations if they were left unspecified
+    if args.search_batch is None:
+        args.search_batch = args.batch_size
+    if args.final_batch is None:
+        args.final_batch = args.batch_size
+
+    args.trials = max(1, args.trials)
+
+    return args
 
 
 def single_run_config(args) -> Config:
@@ -814,12 +833,20 @@ def main():
           flush=True)
     print(f"JAX {jax.__version__} | devices: {jax.devices()}", flush=True)
     print("=" * 78, flush=True)
-    data = Datasets()
+    
+    if args.smoke:
+        print(">>> SMOKE TEST: tiny budgets, results are meaningless <<<", flush=True)
+        args.stage_iters, args.trials, args.search_batch = "3,6", 1, 50  
+        args.final_iters, args.final_batch = 5, 50
+        args.dataset_size = min(args.dataset_size, 100)
+
+    # Dataset instantiated using the configured command line size
+    data = Datasets(n_train=args.dataset_size, n_val=args.dataset_size, n_test=args.dataset_size)
 
     if not args.tune:
         cfg = single_run_config(args)
         if args.smoke:
-            cfg = cfg.replace(num_iters=5, batch_size=50)  # Changed batch size from 64 to 50
+            cfg = cfg.replace(num_iters=5, batch_size=args.batch_size)  
         print(f"Config: {cfg.summary()}", flush=True)
         print(f"        iters={cfg.num_iters}, batch={cfg.batch_size}, "
               f"rtol=atol={cfg.rtol}, exact_logp={cfg.exact_logp}, "
@@ -841,11 +868,6 @@ def main():
         plot_run(state.model, cfg, data.test, state, os.path.join(args.out, "run.png"))
         print("All done.", flush=True)
         return
-
-    if args.smoke:
-        print(">>> SMOKE TEST: tiny budgets, results are meaningless <<<", flush=True)
-        args.stage_iters, args.trials, args.search_batch = "3,6", 1, 50  # Aligned with 1 trial and batch 50
-        args.final_iters, args.final_batch = 5, 50
 
     records, hours = run_search(args, data)
     if not records:

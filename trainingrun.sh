@@ -13,4 +13,4 @@ module load miniforge
 # print a statement
 cd /home/orealao/scnf # go to home directory
 # execute python code
-python cnf_siren_ot.py
+pixi run python cnf_siren_ot.py
