@@ -15,4 +15,4 @@ module load miniforge
 # print a statement
 cd /home/orealao/orcd/pool/scnf # go to home directory
 # execute python code
-pixi run python cnfsmini.py --batch_size=250 --trials=10
+pixi run python cnfsmini.py --batch-size=250 --trials=10
